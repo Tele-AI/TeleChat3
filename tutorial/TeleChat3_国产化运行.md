@@ -1,0 +1,460 @@
+# 前言
+
+本指引旨在华为昇腾 800T A2 上运行 TeleChat3-36B，包含了相关素材的获取、环境的准备、参数的配置、模型的推理和微调。
+
+# 环境准备
+
+## 驱动固件环境准备
+
+登陆服务器并查看固件驱动版本
+
+```shell
+npu-smi info -t board -i 0
+npu-smi info
+```
+
+![查看驱动固件](../images/查看驱动固件.png)
+
+若未安装过相关驱动或固件则提示无此命令。
+
+### 安装驱动固件
+
+以服务器为 Atlas 800T A2、CANN 版本为 8.0.RC3、驱动版本为 24.1.RC3、固件版本为 7.5.0 为例，进行下载和安装。如需其他版本，请在 [官网](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=All&driver=Ascend+HDK+25.2.0) 自行选择和下载。
+
+**安装包地址：**
+
+[驱动 24.1.RC3](https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/Ascend%20HDK/Ascend%20HDK%2024.1.RC3/Ascend-hdk-910b-npu-driver_24.1.rc3_linux-aarch64.run?response-content-type=application/octet-stream)
+
+[固件 7.5.0](https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/Ascend%20HDK/Ascend%20HDK%2024.1.RC3/Ascend-hdk-910b-npu-firmware_7.5.0.1.129.run?response-content-type=application/octet-stream)
+
+
+> 首次安装场景包括安装过驱动固件但是当前已卸载，按照 *先驱动后固件* 的顺序安装；如果需要更新（覆盖安装）场景，按照 *先固件后驱动* 的顺序安装。
+
+#### 前期准备
+
+```sh
+#执行如下命令增加执行权限和校验软件包的一致性和完整性。
+chmod +x Ascend-hdk-910b-npu-driver_24.1.rc3_linux-aarch64.run
+chmod +x Ascend-hdk-910b-npu-firmware_7.5.0.1.129.run
+./Ascend-hdk-910b-npu-driver_24.1.rc3_linux-aarch64.run --check
+./Ascend-hdk-910b-npu-firmware_7.5.0.1.129.run --check
+#Debian系列（包含Ubuntu、Debian、UOS20、UOS20 SP1操作系统）推荐安装依赖
+apt-get install -y dkms gcc 
+```
+
+![下载驱动和固件](../images/下载驱动和固件.png)
+
+#### 从头安装驱动固件
+
+```sh
+# 安装驱动
+./Ascend-hdk-<chip_type>-npu-driver_<version>_linux-<arch>.run --full --install-for-all
+# 输出如下信息驱动安装成功：Driver package installed successfully!
+# 出现 [ERROR]The list of missing tools: lspci,ifconfig，请安装缺少的依赖
+apt-get install -y net-tools pciutils
+
+# 重启系统
+reboot
+# 安装固件
+./Ascend-hdk-<chip_type>-npu-firmware_<version>.run --full
+# 输出如下信息固件安装成功：Firmware package installed successfully! Reboot now or after driver installation for the installation/upgrade to take effect
+# 重启系统
+reboot
+# 查看驱动加载是否成功
+npu-smi info
+```
+
+### 卸载驱动固件
+
+```sh
+#卸载驱动
+/usr/local/Ascend/driver/script/uninstall.sh
+
+#卸载固件
+/usr/local/Ascend/firmware/script/uninstall.sh
+```
+
+## 容器环境准备
+
+### docker安装
+
+```sh
+dnf install -y docker runc
+sudo systemctl start docker
+sudo docker images
+```
+
+![docker安装](../images/docker安装.png)
+
+### 构建镜像
+
+- 访问 [ascend-mindspore](https://www.hiascend.com/developer/ascendhub/detail/9de02a1a179b4018a4bf8e50c6c2339e)
+  选择24.0.RC3-A2-openeuler20.03版本，获取登录访问权限
+
+![基础镜像下载](../images/基础镜像下载.png)
+
+- 使用 [Dockerfile_TeleChat_ms](../Dockerfile_TeleChat_ms) 搭建镜像
+
+```sh
+docker pull swr.cn-south-1.myhuaweicloud.com/ascendhub/ascend-mindspore:24.0.RC3-A2-openeuler20.03
+docker build -f Dockerfile_TeleChat_ms -t telechat3-ms:1.0 .
+```
+
+### 权重下载
+
+- [TeleChat3-36B-ms](https://modelscope.cn/models/TeleAI/TeleChat3-36B)
+
+### 运行容器
+
+```shell
+docker run -itd -u 0 --ipc=host  --network host \
+--name telechat3 \
+--privileged \
+--device=/dev/davinci0 \
+--device=/dev/davinci1 \
+--device=/dev/davinci2 \
+--device=/dev/davinci3 \
+--device=/dev/davinci4 \
+--device=/dev/davinci5 \
+--device=/dev/davinci6 \
+--device=/dev/davinci7 \
+--device=/dev/davinci_manager \
+--device=/dev/devmm_svm \
+--device=/dev/hisi_hdc \
+-v /usr/local/Ascend/driver:/usr/local/Ascend/driver \
+-v /usr/local/Ascend/add-ons/:/usr/local/Ascend/add-ons/ \
+-v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi \
+-v /usr/local/sbin/:/usr/local/sbin/ \
+-v /var/log/npu/conf/slog/slog.conf:/var/log/npu/conf/slog/slog.conf \
+-v /var/log/npu/slog/:/var/log/npu/slog \
+-v /var/log/npu/profiling/:/var/log/npu/profiling \
+-v /var/log/npu/dump/:/var/log/npu/dump \
+-v /var/log/npu/:/usr/slog \
+-v /data03:/mnt/model \
+telechat3-ms:1.0 \
+/bin/bash
+```
+
+最后的模型挂载路径可以更换为本地保存模型的路径。
+
+## 容器内环境配置
+
+```shell
+docker exec -it your_image_name bash
+export PYTHONPATH=/workspace/mindformers_telechat3
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+unset RANK_TABLE_FILE
+```
+
+验证 MindSpore
+
+```sh
+python -c "import mindspore;mindspore.set_context(device_target='Ascend');mindspore.run_check()"
+```
+![验证环境](../images/验证环境.png)
+
+验证 MindFormers
+
+```python
+python -c "import mindformers;mindformers.run_check()"
+```
+
+# 模型推理
+
+## 推理参数配置
+
+若加载预训练序列长度为 32K 的模型权重：
+```yaml
+model:
+  model_config:
+    seq_length: 32768
+    extend_method: 'YARN'
+    scaling_factor:
+      beta_fast: 32.0
+      beta_slow: 1.0
+      factor: 4.0
+      mscale: 1.0
+      mscale_all_dim: 1.0
+      original_max_position_embeddings: 8192
+
+# 参数说明
+seq_length: 模型能够推理的最大长度
+extend_method: 开启 YaRN 特性
+factor: 模型权重的预训练序列长度对 original_max_position_embeddings 的倍数
+original_max_position_embeddings: 模型的原始预训练长度
+```
+
+若加载预训练序列长度为 128K 的模型权重：
+```yaml
+model:
+  model_config:
+    seq_length: 131072
+    extend_method: 'YARN'
+    scaling_factor:
+      beta_fast: 32.0
+      beta_slow: 1.0
+      factor: 16.0
+      mscale: 1.0
+      mscale_all_dim: 1.0
+      original_max_position_embeddings: 8192
+```
+
+
+
+
+## 多卡推理
+
+```shell
+cd /workspace/mindformers_telechat3/research/telechat3
+unset RANK_TABLE_FILE
+bash ../../scripts/msrun_launcher.sh "python3 run_telechat_predict.py \
+  --vocab_file_path tokenizer.model \
+  --checkpoint_path /mnt/model/workspace/TeleChat3-36B_ms.ckpt \
+  --use_parallel True \
+  --yaml_file telechat3-36b/predict_telechat_36b.yaml" 8
+
+# 参数说明
+vocab_file_path: Tokenizer 文件路径
+checkpoint_path: 模型权重文件路径
+use_parallel: 是否使用多卡推理
+yaml_file: 推理配置文件路径
+```
+
+> **说明：**\
+对于推理和训练的启动命令，如果加载的权重分片数与实际使用的显卡数不同，则需要使用权重转换（比如设置 `auto_trans_ckpt` 为 True），同时修改 yaml 文件中的[并行配置](#并行配置)。此外，若转换前的权重为分布式权重（分片数大于 1 ），则转换时需要同时指定转换前的切分策略（如设置 'src_strategy_path_or_dir' 为权重对应的切分策略文件）。**下同**。
+
+![推理](../images/推理.png)
+
+
+msrun_launcher.sh 是并行需要的启动文件，所提供的参数如下表所示：
+
+| **参数**         | **单机是否必选** | **多机是否必选** |    **默认值**    | **说明**                         |
+| ---------------- | :--------------: | :--------------: | :--------------: | -------------------------------- |
+| WORKER_NUM       |     &check;      |     &check;      |        8         | 所有节点中使用计算卡的总数       |
+| LOCAL_WORKER     |        -         |     &check;      |        8         | 当前节点中使用计算卡的数量       |
+| MASTER_ADDR      |        -         |     &check;      |    127.0.0.1     | 指定分布式启动主节点的ip         |
+| MASTER_PORT      |        -         |     &check;      |       8118       | 指定分布式启动绑定的端口号       |
+| NODE_RANK        |        -         |     &check;      |        0         | 指定当前节点的rank id            |
+| LOG_DIR          |        -         |     &check;      | output/msrun_log | 日志输出路径，若不存在则递归创建 |
+| JOIN             |        -         |     &check;      |      False       | 是否等待所有分布式进程退出       |
+| CLUSTER_TIME_OUT |        -         |     &check;      |       7200       | 分布式启动的等待时间，单位为秒   |
+
+抓取 `output/msrun_log/` 下任意worker的日志即可查看推理结果。
+
+如果需要控制生成长度，可以：
+
+1. 在配置文件中修改 max_decode_length，该参数的含义是input_prompt + max_new_tokens 的总 tokens 数量。
+
+2. 在 `run_telechat_predict.py` 代码中，调用 generate 之前修改传入的 max_new_tokens。
+
+   注意：若添加 max_new_tokens 参数，该参数会覆盖上面的 max_decode_length 参数。
+
+
+如果需要获取输出的 logits 或者 scores，可以：
+
+1. 在配置文件中设置 return_dict_in_generate 为True。
+
+2. 设置 output_scores、output_logits 等参数为 True。
+
+   注意：修改后返回的数据类型是词典，需要对应改一下 output 的解码过程。
+
+# 模型微调
+
+## 处理微调数据
+
+### 微调数据样例
+```json
+{"system": "你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。\n", "dialog": [{"role": "user", "content": "给我推荐一本好看的小说吧。"}, {"role": "bot", "content": " 如果你喜欢历史题材，我可以向你推荐一本红楼梦。如果你喜欢奇幻题材，我可以向你推荐《哈利波特》系列或《指环王》。如果喜欢悬疑题材，我可以推荐《福尔摩斯探案全集》。请告诉我您的喜好，我可以更好地推荐适合你的小说。"}], "multiturn": false, "tool": false}
+```
+
+### 启动命令
+```bash
+cd /workspace/mindformers_telechat3/research/telechat3
+
+python telechat_preprocess.py --input_dataset_file /workspace/TeleChat3/datas/demo_tool.jsonl --vocab_file_path ./tokenizer.model --max_length 32768 --output_path {path}/mindrecords
+
+# 参数说明:
+input_dataset_file: 数据集 jsonl 文件
+vocab_file_path: 词模型文件路径
+max_length: 数据集长度
+output_path: 生成数据集的路径
+```
+
+![数据处理](../images/数据处理.png)
+
+## 微调方式选择与超参配置
+
+> 在模型训练所加载的 yaml 文件中找到对应配置并修改。
+
+### 并行配置
+
+根据 **服务器节点数**、**模型参数大小**、**模型上下文长度** 等信息，修改分布式策略，并需保证 `data_parallel * model_parallel * pipeline_stage * context_parallel == device_num`。
+
+```yaml
+# 配置双机 16 卡分布式策略，以 dp=1, mp=4, pp=2, cp=2 为例
+parallel_config:
+  data_parallel: 1
+  model_parallel: 4
+  pipeline_stage: 2
+  context_parallel: 2 # 序列并行，长文训练时建议启用
+  micro_batch_num: 2
+```
+
+### 序列长度相关超参设置
+
+根据模型微调所需的上下文长度、预训练长度，设置相关参数。示例如下：
+
+```yaml
+model:
+  model_config:
+    seq_length: 32768
+    extend_method: "YARN"
+    scaling_factor:
+      beta_fast: 32.0
+      beta_slow: 1.0
+      factor: 4.0
+      mscale: 1.0
+      mscale_all_dim: 1.0
+      original_max_position_embeddings: 8192
+    theta: 1000000
+
+
+# 参数说明：
+seq_length: 模型的微调长度
+theta: 旋转位置编码中计算旋转角的底数，建议设置为 1000000。
+```
+
+
+## 多机多卡微调
+
+假设有两个服务器节点，节点 0 的 IP 为 192.168.1.1，作为主节点；节点 1 的 IP 为 192.168.1.2。每个节点 8 卡，共 16 张卡。
+
+在每台机器上设置环境变量
+
+```sh
+#For 192.168.1.1
+export SHARED_PATHS=/{shared_path}  # 用于保存训练权重、切分策略等文件的路径，需为共享存储，保证参与微调的机器均能访问
+unset RANK_TABLE_FILE
+export MS_ENABLE_LCCL=off
+export HCCL_IF_IP=192.168.1.1
+
+#For 192.168.1.2
+export SHARED_PATHS=/{shared_path}  # 用于保存训练权重、切分策略等文件的路径，需为共享存储，保证参与微调的机器均能访问
+unset RANK_TABLE_FILE
+export MS_ENABLE_LCCL=off
+export HCCL_IF_IP=192.168.1.2
+```
+
+微调之前，可以选择自动权重转换或离线权重转换。
+
+### 自动权重转换
+
+涉及到权重转换的详细教程请参考特性文档模型权重切分与合并。若模型权重在服务器共享盘上，可以尝试使用自动权重转换。
+
+```sh
+cd /workspace/mindformers_telechat3
+
+# 节点 0，IP 为 192.168.1.1，作为主节点
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+ --config research/telechat3/telechat3-36b/finetune_telechat_36b.yaml \
+ --load_checkpoint /mnt/model/workspace/TeleChat3-36B_ms.ckpt \
+ --train_dataset {path}/mindrecords \
+ --use_parallel True \
+ --auto_trans_ckpt True \
+ --register_path research/telechat3 "
+  16 8 192.168.1.1 8118 0 output/msrun_log False 300
+
+# 节点 1，IP 为 192.168.1.2，启动命令与主节点仅参数 NODE_RANK 不同
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+ --config research/telechat3/telechat3-36b/finetune_telechat_36b.yaml \
+ --load_checkpoint /mnt/model/workspace/TeleChat3-36B_ms.ckpt \
+ --train_dataset {path}/mindrecords \
+ --use_parallel True \
+ --auto_trans_ckpt True \
+ --register_path research/telechat3 "
+  16 8 192.168.1.1 8118 1 output/msrun_log False 300
+```
+
+### 离线权重转换
+
+- step 1. 打开策略文件保存开关（如果已有目标切分策略文件，则 Step 1 与 Step 2 可跳过。
+
+修改微调配置文件 `finetune_telechat_36b.yaml`，将 `only_save_strategy` 设置为 True。
+
+- step 2. 启动训练，注意关闭自动切分 `auto_trans_ckpt` 参数。
+
+```sh
+cd /workspace/mindformers_telechat3
+
+# 节点 0，IP 为 192.168.1.1，作为主节点
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+  --config research/telechat3/finetune_telechat_36b.yaml \
+  --train_dataset {path}/mindrecords \
+  --use_parallel True \
+  --register_path research/telechat3 " 16 8 192.168.1.1 8118 0 output/msrun_log False 300
+
+# 节点 1，IP 为 192.168.1.2，启动命令与主节点仅参数 NODE_RANK 不同
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+  --config research/telechat3/finetune_telechat_36b.yaml \
+  --train_dataset {path}/mindrecords \
+  --use_parallel True \
+  --register_path research/telechat3 " 16 8 192.168.1.1 8118 1 output/msrun_log False 300
+```
+
+![策略文件生成](../images/策略文件生成.png)
+
+各节点的策略文件保存在各自的 `output/strategy` 目录下。
+
+- step 3. 离线权重转换 
+
+```sh
+cd /workspace/mindformers_telechat3
+
+python mindformers/tools/ckpt_transorm/transform_checkpoint.py \
+--src_checkpoint /mnt/model/workspace/TeleChat3-36B_ms.ckpt \
+--dst_checkpoint /mnt/model/workspace/TeleChat3-36B-mp4pp2cp2 \
+--dst_strategy output/strategy
+```
+
+转换完成后在 `dst_checkpoint` 目录下生成切片权重，注意此时会根据前缀生成新一级目录。
+
+![权重切片](../images/权重切片.png)
+
+- step 4. 将配置文件修改回来
+
+修改微调配置文件 `finetune_telechat_36b.yaml`，将 `only_save_strategy` 设置为 False。
+
+- step 5. 启动任务，启动命令同step2，此处传入的权重路径 model_dir 应该是按照 `model_dir/rank_x/xxx.ckpt` 格式存放
+
+```bash
+cd /workspace/mindformers_telechat3
+
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+  --config research/telechat3/telechat3-36b/finetune_telechat_36b.yaml \
+  --train_dataset {path}/mindrecords \
+  --load_checkpoint /mnt/model/workspace/TeleChat3-36B-mp4pp2cp2/ \
+  --use_parallel True " 16 8 192.168.1.1 8118 0 output/msrun_log False 300
+
+bash scripts/msrun_launcher.sh "python run_mindformer.py \
+  --config research/telechat3/telechat3-36b/finetune_telechat_36b.yaml \
+  --train_dataset {path}/mindrecords \
+  --load_checkpoint /mnt/model/workspace/TeleChat3-36B-mp4pp2cp2/ \
+  --use_parallel True " 16 8 192.168.1.1 8118 1 output/msrun_log False 300
+```
+
+当控制台出现如下日志时：
+
+```
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:0, log file:output/msrun_log/worker_0.log. Environment variable [RANK_ID] is exported.
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:1, log file:output/msrun_log/worker_1.log. Environment variable [RANK_ID] is exported.
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:2, log file:output/msrun_log/worker_2.log. Environment variable [RANK_ID] is exported.
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:3, log file:output/msrun_log/worker_3.log. Environment variable [RANK_ID] is exported.
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:4, log file:output/msrun_log/worker_4.log. Environment variable [RANK_ID] is exported.
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:5, log file:output/msrun_log/worker_5.log. Environment variable [RANK_ID] is exported.
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:6, log file:output/msrun_log/worker_6.log. Environment variable [RANK_ID] is exported.
+[mindspore/parallel/cluster/process_entity/_api.py:224] Start worker process with rank id:7, log file:output/msrun_log/worker_7.log. Environment variable [RANK_ID] is exported.
+```
+
+说明启动微调成功，此时抓取每个 worker 的日志可以看到训练进度。如果 pipeline_stage > 1，请以最后一个 worker 日志中的 loss 为准。
+
+![微调](../images/微调.png)

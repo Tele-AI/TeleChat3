@@ -1,0 +1,13 @@
+python3 -m vllm.entrypoints.openai.api_server \
+        --model {{YOUR_MODEL_PATH}} \
+        --trust-remote-code \
+        --tensor-parallel-size 4 \
+        --dtype bfloat16 \
+        --port 8000 \
+        --gpu-memory-utilization 0.9 \
+        --uvicorn-log-level "error" \
+        --enable-auto-tool-choice \
+        --tool-call-parser hermes \
+        --enable-reasoning \
+        --reasoning-parser deepseek_r1 \
+        --disable-custom-all-reduce
