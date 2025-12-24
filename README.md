@@ -41,10 +41,11 @@
 
 
 本次发布版本和下载链接见下表：
-|                               | modelscope | Huggingface |
-|-------------------------------|------------|-------------|
-| TeleChat3-105B-A4.7B-Thinking | -          | -           |
-| TeleChat3-36B-Thinking        | -          | -           |
+|                               | modelscope                                                                       | Huggingface  |
+|-------------------------------|----------------------------------------------------------------------------------|--------------|
+| TeleChat3-105B-A4.7B-Thinking | [modelscope](https://modelscope.cn/models/TeleAI/TeleChat3-105B-A4.7B-Thinking)  | -            |
+| TeleChat3-36B-Thinking        | [modelscope](https://modelscope.cn/models/TeleAI/TeleChat3-36B-Thinking)         | -            |
+
 
 # 能力评估
 为了全面体现模型效果，针对六个维度（知识、数学、创作、代码、Agent、指令）进行模型能力评测，所有模型均评测Thinking思考模式，具体评测效果如下：
